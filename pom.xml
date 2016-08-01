@@ -5,7 +5,7 @@
 
     <groupId>ai.lana</groupId>
     <artifactId>demo-kmod</artifactId>
-    <version>0.2.0-SNAPSHOT</version>
+    <version>0.2.0</version>
 
     <packaging>kjar</packaging>
 
@@ -13,7 +13,7 @@
         <connection>scm:git:https://github.com/lana-ai/demo-kmod.git</connection>
         <developerConnection>scm:git:https://github.com/lana-ai/demo-kmod.git</developerConnection>
         <url>git@github.com:lana-ai/demo-kmod.git</url>
-        <tag>HEAD</tag>
+        <tag>demo-kmod-0.2.0</tag>
     </scm>
 
     <licenses>
