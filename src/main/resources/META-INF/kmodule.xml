@@ -1,0 +1,6 @@
+<kmodule xmlns="http://jboss.org/kie/6.0.0/kmodule">
+    <kbase default="true" name="ai.lana.demo" includes="ws.salient.chat,ws.salient.luis" packages="ai.lana.aws.cloudwatch,ai.lana.demo,ai.lana.cloudwatch,ai.lana.aws,ws.salient.chat,ws.salient.luis" eventProcessingMode="stream">
+        <ksession name="ai.lana.demo.stateless" type="stateless" default="true"/>
+        <ksession name="ai.lana.demo.session" type="stateful" default="true"/>
+    </kbase>
+</kmodule>

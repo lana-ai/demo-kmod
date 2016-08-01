@@ -1,0 +1,75 @@
+/*
+ * Copyright 2016 the original author or authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package ai.lana.demo;
+
+import java.util.Collection;
+import ws.salient.chat.Intent;
+import ws.salient.chat.Message;
+import ws.salient.chat.Render;
+import ws.salient.chat.Chat;
+import java.util.Map;
+import java.util.LinkedHashMap;
+import java.util.LinkedList;
+import org.jbpm.ruleflow.instance.RuleFlowProcessInstance;
+import ai.lana.aws.Service;
+import ai.lana.aws.Resource;
+import ai.lana.aws.cloudwatch.MetricAlarm;
+import ai.lana.aws.cloudwatch.MetricAlarm.State;
+import ai.lana.aws.cloudwatch.MetricAlarm.Statistic;
+import ai.lana.aws.cloudwatch.MetricValue;
+import ai.lana.aws.cloudwatch.Metric;
+import ai.lana.aws.dynamodb.Table;
+import ai.lana.aws.lambda.Function;
+import java.util.TreeSet;
+
+global Chat chat;
+global Metrics metrics;
+
+rule "CreateServices"
+    salience 100
+when
+    not Service()
+then
+    insert(new Service("lambda").withAlias("function").withAlias("functions"));
+    insert(new Service("dynamodb").withAlias("dynamo").withAlias("table").withAlias("tables"));
+end
+
+rule "CreateTables"
+    salience 100
+when
+    service: Service(name == "dynamodb")
+    not Table()
+then
+    Table table = new Table(service, "product") 
+            .withAlias("products")
+            .withProvisionedReadCapacityUnits(140L);
+    insert(table);
+end
+
+rule "CreateFunctions"
+    salience 100
+when
+    service: Service(name == "lambda")
+    not Function()
+then
+    Function getproducts = new Function(service, "getproducts")
+            .withAlias("getproduct")
+            .withAlias("getprod");
+    insert(getproducts);
+end
+
+

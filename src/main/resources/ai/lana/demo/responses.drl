@@ -1,0 +1,339 @@
+/*
+ * Copyright 2016 the original author or authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package ai.lana.demo;
+
+import java.util.stream.Collectors;
+import java.util.Collection;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+import java.util.LinkedList;
+import ws.salient.chat.Intent;
+import ws.salient.chat.Message;
+import ws.salient.chat.Response;
+import ws.salient.chat.Render;
+import ws.salient.chat.Chat;
+import ws.salient.chat.Attachable;
+import ws.salient.chat.AttachableList;
+import java.util.Map;
+import java.util.LinkedHashMap;
+import java.util.LinkedList;
+import org.jbpm.ruleflow.instance.RuleFlowProcessInstance;
+import ai.lana.aws.Service;
+import ai.lana.aws.Resource;
+import ai.lana.aws.cloudwatch.MetricAlarm;
+import ai.lana.aws.cloudwatch.MetricValue;
+import ai.lana.aws.cloudwatch.Metric;
+import ai.lana.aws.dynamodb.Table;
+import ai.lana.aws.dynamodb.DynamoDB;
+import ai.lana.aws.lambda.Function;
+import java.util.TreeSet;
+import java.time.ZoneId;
+
+global Chat chat;
+global Metrics metrics;
+global ZoneId zoneId;
+global DynamoDB dynamodb;
+
+function Response textResponse(Intent intent, String messageKey) {  
+    return new Response(intent, messageKey);  
+}  
+
+function Response resourcesResponse(Intent intent, String text, List resources) {  
+    return new Response(intent, text, new AttachableList(resources));  
+}
+
+rule "Greet"
+    activation-group "Response"
+when
+    intent: Intent(first() == "Greet")
+    not Response(intent == intent)
+then
+    insert(textResponse(intent, "greet"));
+end
+
+rule "Help"
+    activation-group "Response"
+when
+    intent: Intent(first() == "Help")
+    not Response(intent == intent)
+    responses: LinkedList() from collect (Response(text != null && text.startsWith("help."))
+)
+then
+    insert(textResponse(intent, "help." + responses.size() % 4));
+end
+
+
+rule "Error"
+    activation-group "Response"
+when
+    intent: Intent(first() == "Error")
+    not Response(intent == intent)
+then
+    insert(textResponse(intent, "error"));
+end
+
+rule "Thank"
+    activation-group "Response"
+when
+    intent: Intent(first() == "Thank")
+    not Response(intent == intent)
+then
+    insert(textResponse(intent, "np"));
+end
+    
+rule "UpdateTableMissingValue"
+    activation-group "Response"
+when
+    intent: Intent(first() == "UpdateTable", !containsKey("builtin.number"))
+    not Response(intent == intent)
+    table: Table(anyMatch(intent) || !intent.containsKey("Resource"))
+then
+    Response response = new Response(intent, "dynamodb.update.value").putSingle("Resource", table.getName());
+    insert(response);
+end
+
+rule "UpdateTableWithValue"
+    activation-group "Response"
+when
+    intent: Intent(first() == "None", containsKey("builtin.number"))
+    not Response(intent == intent)
+    lastResponse: Response(text == "dynamodb.update.value") over window:length(1)
+    table: Table(anyMatch((String)lastResponse.getFirst("Resource")) || !intent.containsKey("Resource"))
+    alarm: MetricAlarm(metric.namespace == "DynamoDB", metric.metricName == "ConsumedReadCapacityUnits", metric.getDimensions().get("TableName") == table.getName())
+    values: TreeSet() from collect (MetricValue(metric.namespace == "Lambda", metric.metricName == "Invocations", metric.getDimensions().get("FunctionName") == "getproducts"))
+then
+    MetricValue value = new MetricValue()
+                    .withMetric(new Metric()
+                            .withNamespace("Lambda")
+                            .withMetricName("Invocations")
+                            .withDimension("FunctionName", "getproducts"))
+                    .withSum(((MetricValue)values.last()).getSum())
+                    .withTimestamp(clock.getCurrentTime());
+    Response response = dynamodb.updateProvisionedReads(intent, value, alarm, table, (String)intent.getFirst("builtin.number"));
+    metrics.newMetrics(value, table);
+    insert(response);
+end
+
+rule "UpdateTable"
+    activation-group "Response"
+when
+    intent: Intent(first() == "UpdateTable", containsKey("builtin.number"))
+    not Response(intent == intent)
+    values: TreeSet() from collect (MetricValue(metric.namespace == "Lambda", metric.metricName == "Invocations", metric.getDimensions().get("FunctionName") == "getproducts"))
+    not Response(intent == intent)
+    table: Table(anyMatch(intent) || !intent.containsKey("Resource"))
+    alarm: MetricAlarm(metric.namespace == "DynamoDB", metric.metricName == "ConsumedReadCapacityUnits", metric.getDimensions().get("TableName") == table.getName())
+then
+    MetricValue value = new MetricValue()
+                    .withMetric(new Metric()
+                            .withNamespace("Lambda")
+                            .withMetricName("Invocations")
+                            .withDimension("FunctionName", "getproducts"))
+                    .withSum(((MetricValue)values.last()).getSum())
+                    .withTimestamp(clock.getCurrentTime());
+    Response response = dynamodb.updateProvisionedReads(intent, value, alarm, table, (String)intent.getFirst("builtin.number"));
+    metrics.newMetrics(value, table);
+    insert(response);
+end
+
+rule "ListServiceResources"
+    activation-group "Response"
+when
+    intent: Intent(first() == "ListResources")
+    not Response(intent == intent)
+    services: LinkedList(size() > 0) from collect (Service(anyMatch(intent)))
+    not Response(intent == intent)
+    functions: LinkedList() from collect (Function(services.contains(service)))
+    tables: LinkedList() from collect (Table(services.contains(service)))          
+then
+    if (!functions.isEmpty()) {
+        insert(resourcesResponse(intent, "list.resources.lambda", functions));
+    }
+    if (!tables.isEmpty()) {
+        insert(resourcesResponse(intent, "list.resources.dynamodb", tables));
+    }
+end
+
+rule "ListResources"
+    activation-group "Response"
+when
+    intent: Intent(first() == "ListResources")
+    not Response(intent == intent)
+    functions: LinkedList() from collect (Function())
+    tables: LinkedList() from collect (Table())                          
+then
+    insert(resourcesResponse(intent, "list.resources.lambda", functions));
+    insert(resourcesResponse(intent, "list.resources.dynamodb", tables));
+end
+
+rule "GetMetricServiceResourceErrors"
+    activation-group "Response"
+when
+    intent: Intent(first() == "GetMetricErrors")
+    not Response(intent == intent)
+    services: LinkedList(size() > 0) from collect (Service(anyMatch(intent)))
+    not Response(intent == intent)
+    resources: LinkedList(size() > 0) from collect (Resource(anyMatch(intent), services.contains(service)))
+    values: TreeSet() from collect (MetricValue())
+then
+    for (Response response : metrics.getErrors(intent, resources, values)) {
+        insert(response);
+    }
+end
+
+rule "GetMetricResourceErrors"
+    activation-group "Response"
+when
+    intent: Intent(first() == "GetMetricErrors")
+    not Response(intent == intent)
+    resources: LinkedList(size() > 0) from collect (Resource(anyMatch(intent)))  
+    values: TreeSet() from collect (MetricValue())
+then
+    for (Response response : metrics.getErrors(intent, resources, values)) {
+        insert(response);
+    }
+end
+
+rule "GetMetricServiceErrors"
+    activation-group "Response"
+when
+    intent: Intent(first() == "GetMetricErrors")
+    not Response(intent == intent)
+    services: LinkedList(size() > 0) from collect (Service(anyMatch(intent)))
+    not Response(intent == intent)
+    resources: LinkedList(size() > 0) from collect (Resource(services.contains(service)))
+    values: TreeSet() from collect (MetricValue())
+then
+    for (Response response : metrics.getErrors(intent, resources, values)) {
+        insert(response);
+    }
+end
+
+rule "GetMetricErrors"
+    activation-group "Response"
+when
+    intent: Intent(first() == "GetMetricErrors")
+    not Response(intent == intent)
+    resources: LinkedList(size() > 0) from collect (Resource())
+    values: TreeSet() from collect (MetricValue())
+then
+    for (Response response : metrics.getErrors(intent, resources, values)) {
+        insert(response);
+    }
+end
+
+rule "GetMetricServiceResourceStatistics"
+    activation-group "Response"
+when
+    intent: Intent(first() == "GetMetricStatistics")
+    not Response(intent == intent)
+    services: LinkedList(size() > 0) from collect (Service(anyMatch(intent)))
+    not Response(intent == intent)
+    resources: LinkedList(size() > 0) from collect (Resource(this.anyMatch(intent), services.contains(service))) 
+    values: TreeSet() from collect (MetricValue())
+then
+    for (Response response : metrics.getStatistics(intent, resources, values)) {
+        insert(response);
+    }
+end
+
+rule "GetMetricResourceStatistics"
+    activation-group "Response"
+when
+    intent: Intent(first() == "GetMetricStatistics")
+    not Response(intent == intent)
+    resources: LinkedList(size() > 0) from collect (Resource(this.anyMatch(intent)))  
+    values: TreeSet() from collect (MetricValue())
+then
+    for (Response response : metrics.getStatistics(intent, resources, values)) {
+        insert(response);
+    }
+end
+
+rule "GetMetricServiceStatistics"
+    activation-group "Response"
+when
+    intent: Intent(first() == "GetMetricStatistics")
+    not Response(intent == intent)
+    services: LinkedList(size() > 0) from collect (Service(anyMatch(intent)))
+    resources: LinkedList(size() > 0) from collect (Resource(services.contains(service)))
+    values: TreeSet() from collect (MetricValue())
+then
+    for (Response response : metrics.getStatistics(intent, resources, values)) {
+        insert(response);
+    }
+end
+
+rule "GetMetricStatistics"
+    activation-group "Response"
+when
+    intent: Intent(first() == "GetMetricStatistics")
+    not Response(intent == intent)
+    resources: LinkedList(size() > 0) from collect (Resource())
+    values: TreeSet() from collect (MetricValue())
+then
+    for (Response response : metrics.getStatistics(intent, resources, values)) {
+        insert(response);
+    }
+end
+
+rule "Guide"
+    activation-group "Response"
+when
+    intent: Intent(first() == "None")
+    not Response(intent == intent)
+    responses: LinkedList(size() < 4) from collect (Response(text != null && text.startsWith("help."))
+)
+then
+    insert(textResponse(intent, "help." + responses.size()));
+end
+
+rule "None"
+    activation-group "Response"
+when
+    intent: Intent()
+    not Response(intent == intent)
+then
+    insert(textResponse(intent, "none"));
+end
+
+rule "StatisticsAlarm"
+when
+    value: MetricValue() over window:length(5)
+    alarm: MetricAlarm(metric == value.metric, stateValue != getState(value.sum))
+    Message(replyTo: replyTo) over window:length(1)
+    resource: Resource(getMetrics(false) contains value.metric)
+    values: TreeSet() from collect (MetricValue())
+then
+    update(alarm.withStateValue(alarm.getState(value.getSum())));
+    insert(metrics.getStatistics(new Intent("Alarm", 1.0).put("Resource", resource.getName()).put("Service", resource.getService().getName()), resource, values).withReplyTo(replyTo));
+end
+
+rule "ErrorAlarm"
+when
+    value: MetricValue() over window:length(5)
+    alarm: MetricAlarm(metric == value.metric, stateValue != getState(value.sum))
+    Message(replyTo: replyTo) over window:length(1)
+    resource: Resource(getMetrics(true) contains value.metric)
+    values: TreeSet() from collect (MetricValue())
+then
+    update(alarm.withStateValue(alarm.getState(value.getSum())));
+    insert(metrics.getErrors(new Intent("Alarm", 1.0).put("Resource", resource.getName()).put("Service", resource.getService().getName()), resource, values).withReplyTo(replyTo));
+end
+
+
